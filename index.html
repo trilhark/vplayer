@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Player test</title>
+</head>
+<body>
+    <div id="player-control">
+        <video id="player"></video>
+        <div id="control">
+            <div id="control-control">
+                <button id="refresh" onclick="onRefreshclick()">Refresh</button>
+                <button id="previous" onclick="onPreviousclick()">Previous</button>
+                <button id="play" onclick="onPlayclick()">Play</button>
+                <button id="next" onclick="onNextclick()">Next</button>
+            </div>
+            <div id="timecode">
+                <div id="seeker"><div><span id="current"></span>s/<span id="durration"></span>s</div>
+                <div>
+                    <button id="shuffle" onclick="shuffle();createVideoList()">Shuffle</button>
+                    <input type="checkbox" id="auto-shuffle" onchange="onShuffleChange()">
+                    <span id="folder-name"></span>/<span id="video-name"></span>
+                    <input type="text" id="currentv"> / <input type="text" id="nbv" disabled>
+                </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="list-video" class="list"></div>
+    <div>
+        <div><input type="text" name="tofetch" id="tofetch"><button id="dofetch" onclick="doFetch()">Fetch</button></div>
+        <div id="list-folder" class="list"></div>
+    </div>
+</body>
+<script>
+    const videoFolder = '/vids/'
+    const elements = {
+        player: document.getElementById('player'),
+        current: document.getElementById('current'),
+        durration: document.getElementById('durration'),
+        play: document.getElementById('play'),
+        listFolder: document.getElementById('list-folder'),
+        listVideo: document.getElementById('list-video'),
+        currentV: document.getElementById('currentv'),
+        nbV: document.getElementById('nbv'),
+        seeker: document.getElementById('seeker'),
+        folderName: document.getElementById('folder-name'),
+        videoName: document.getElementById('video-name'),
+        autoShuffle: document.getElementById('auto-shuffle'),
+        currentVideoButton: undefined,
+    };
+    window.addEventListener("keydown", function(e) {
+    if(["Space","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.code) > -1) {
+        e.preventDefault();
+    }
+}, false);
+    window.addEventListener('keyup',e => {
+        switch(e.key){
+            case 'ArrowDown':
+            case 'n':
+                onNextclick();
+                e.preventDefault();
+                break;
+            case 'p':
+            case 'ArrowUp':
+                onPreviousclick();
+                e.preventDefault();
+                break;
+            case ' ':
+                onPlayclick();
+                e.preventDefault();
+                break;
+            case 'ArrowRight':
+                seekPlus();
+                e.preventDefault();
+                break;
+            case 'ArrowLeft':
+                seekMinus();
+                e.preventDefault();
+                break;
+            case 'f':
+                toogleFullscreen();
+                e.preventDefault();
+                break;
+        }
+    });
+
+    let currentlyPlayingVideo = 0;
+    let currentlyPlayingFolder = 0;
+    let autoShuffle = elements.autoShuffle.checked;
+    const folders = [];
+    const videos = [];
+
+    elements.currentV.addEventListener('blur', () => {
+        const inputedNumber = (parseInt(elements.currentV.value,10)-1)%videos.length;
+        if(!isNaN(inputedNumber)) playByIndex(inputedNumber);
+    });
+    elements.currentV.addEventListener('keydown', e => { if (e.key == 'Enter')elements.currentV.blur()});
+    
+    elements.player.addEventListener('ended',() => {
+        clearInterval(durrationUpdater);
+        playByIndex(currentlyPlayingVideo+1);
+    });
+
+    let durrationUpdater;
+    elements.player.addEventListener('play',() => {
+        elements.play.innerHTML = 'Pause';
+        elements.current.innerHTML = Math.floor(elements.player.currentTime);
+        elements.durration.innerHTML = Math.floor(elements.player.duration);
+        elements.currentV.value = currentlyPlayingVideo+1;
+        elements.nbV.value = videos.length;
+        durrationUpdater = setInterval(() => {
+            elements.current.innerHTML = Math.floor(elements.player.currentTime);
+            elements.durration.innerHTML = Math.floor(elements.player.duration);
+            elements.currentV.innerHTML = currentlyPlayingVideo+1;
+            elements.nbV.value = videos.length;
+            elements.seeker.style = makeProgressBarStyle(elements.player.currentTime/elements.player.duration*100);
+        }, 33);
+    });
+    elements.player.addEventListener('pause',() => {
+        elements.play.innerHTML = 'Play';
+        clearInterval(durrationUpdater);
+    });
+
+    elements.seeker.addEventListener('mouseup', e => {
+        elements.player.currentTime = elements.player.duration*e.offsetX/e.target.offsetWidth;
+    });
+
+    function fetch_folders_list() {
+        const currentFolder = folders[currentlyPlayingFolder]?.n;
+
+        const processResponse = r=> {
+            folders.splice(0);
+            r = r.filter(f => f.type=='directory');
+            r.sort((b,a)=> new Date(a.mtime).valueOf()-new Date(b.mtime).valueOf());
+            r.forEach(e => {folders.push({n:e.name,p:`${videoFolder}${e.name}/`})});
+        };
+
+        const updateFolderList = () => {
+            elements.listFolder.innerHTML='';
+            folders.forEach((d,i) => {
+                const but = document.createElement('button');
+                if(d.n==currentFolder) but.disabled = true;
+                but.id = `bfol_${d.n}`;
+                but.classList.add('bfol');
+                but.innerHTML = d.n;
+                but.addEventListener('click', e => {fetch_folder_content(i);e.preventDefault()});
+                elements.listFolder.appendChild(but);
+            });
+        }
+        return fetch(`${videoFolder}`).then(r => r.json()).then(processResponse).then(updateFolderList);
+    }
+
+    function fetch_folder_content(i) {
+        const folderPath = folders[i].p;
+        const folderName = folders[i].n;
+        elements.folderName.innerHTML = folderName;
+        return fetch(folderPath).then(r => r.json()).then(r=> {if (!r || r.length==0){throw 'vide';}videos.splice(0);r.sort((b,a)=> new Date(a.mtime).valueOf()-new Date(b.mtime).valueOf());r.forEach(e => {if(e.name.slice(-4).toLowerCase()== 'webm')videos.push({name:e.name,src:`${videoFolder}${folderName}/${e.name}`})});}).then(() => {
+            document.getElementById(`bfol_${folders[currentlyPlayingFolder].n}`).disabled = false;
+            document.getElementById(`bfol_${folderName}`).disabled = true;
+            currentlyPlayingFolder = i;
+            if(autoShuffle) shuffle();
+            createVideoList();
+        });
+    }
+
+    fetch_folders_list().then(()=> {
+        if(folders.length > 0) {
+            fetch_folder_content(0);
+        }
+    })
+
+    function onRefreshclick() {
+        fetch_folders_list();
+    }
+
+    function onPreviousclick() {
+        playByIndex(currentlyPlayingVideo-1);
+    }
+
+    function onPlayclick() {
+        if(elements.player.paused){
+            elements.player.play();
+        } else {
+            elements.player.pause();
+        }
+    }
+
+    function createVideoList(){
+            elements.listVideo.innerHTML='';
+
+            videos.forEach((v,i)=> {
+                const but = document.createElement('button');
+                if(i==0) {but.disabled = true;
+                    elements.currentVideoButton = but;
+                }
+                but.id = `bvid_${i}`;
+                but.classList.add('bvid');
+                but.innerHTML = v.name.length > 21 ? v.name.slice(14,-5): v.name.slice(0,-5);
+                but.addEventListener('click', e => {
+                    playByIndex(i);
+                    e.preventDefault();
+                });
+
+                elements.listVideo.appendChild(but);
+            });
+
+            playByIndex(0);
+    }
+
+    function onShuffleChange(){
+        autoShuffle = elements.autoShuffle.checked;
+    }
+    function shuffle() {
+        let currentIndex = videos.length,  randomIndex;
+
+        // While there remain elements to shuffle.
+        while (currentIndex != 0) {
+
+            // Pick a remaining element.
+            randomIndex = Math.floor(Math.random() * currentIndex);
+            currentIndex--;
+
+            // And swap it with the current element.
+            [videos[currentIndex], videos[randomIndex]] = [
+            videos[randomIndex], videos[currentIndex]];
+        }
+    }
+
+    function onNextclick() {
+        playByIndex(currentlyPlayingVideo+1);
+    }
+
+    function playByIndex(i){
+        elements.currentVideoButton.disabled = false;
+        currentlyPlayingVideo = i%videos.length;
+        if(currentlyPlayingVideo < 0) {
+            currentlyPlayingVideo += videos.length;
+        }
+        elements.currentVideoButton = document.getElementById(`bvid_${currentlyPlayingVideo}`);
+        elements.currentVideoButton.disabled = true;
+        elements.currentVideoButton.scrollIntoView({block:'center'})
+        elements.videoName.innerHTML = videos[currentlyPlayingVideo].name;
+        elements.player.setAttribute('src',videos[currentlyPlayingVideo].src);
+        elements.player.play();
+    }
+
+    function seekPlus(){
+        elements.player.currentTime = Math.min(elements.player.currentTime + 5, elements.player.duration - 5);
+    }
+
+    function seekMinus(){
+        elements.player.currentTime = Math.max(elements.player.currentTime - 5, 0);
+    }
+
+    let currentFullscreenOperation = Promise.resolve();
+    async function toogleFullscreen(){
+        await currentFullscreenOperation;
+        const contr = document.getElementById("control-control");
+        if(!document.fullscreenElement) {
+            elements.listVideo.style = "display:none;";
+            contr.style = "display:none;";
+            currentFullscreenOperation = document.documentElement.requestFullscreen().catch();
+        } else {
+            elements.listVideo.style = "";
+            contr.style = "";
+            currentFullscreenOperation = document.exitFullscreen().catch();
+        }
+    }
+
+    function makeProgressBarStyle(percent){
+        return`background: linear-gradient(90deg,
+        #58bdb4 ,
+        #58bdb4 ${percent}%,
+        #333 ${percent}%,
+        #333 100%);`
+    }
+
+</script>
+<style>
+    * {
+        padding: 0;
+        margin: 0;
+        box-sizing: border-box;
+    }
+    body {
+        background-color: #222;
+        margin: 0;
+        padding: 0;
+        display:flex;
+        flex-direction: row;
+        justify-content: space-between;
+        overflow: hidden;
+    }
+    body,body>* {
+        height: 100vh;
+    }
+
+    #timecode{
+        display: flex;
+        flex-direction: row;
+        justify-content: baseline;
+    }
+    #seeker{
+        flex-grow: 2;
+        user-select:none;
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+    }
+    #currentv,#nbv{
+        max-width: 2em;
+        user-select: all;
+        border:0;
+        color:#000;
+        background-color: #999999;
+    }
+    #folder-name{
+        user-select:all;
+    }
+    #player-control {
+        flex-grow: 4;
+    }
+    #control{
+        max-height:6vh;
+    }
+    #control * {
+        max-height: 3vh;
+    }
+    #player {
+        object-fit: contain;
+        object-position: top left;
+        max-width: 90vw;
+        height: 94vh;
+    }
+    .list {
+        flex-shrink: 8;
+        min-width:0;
+        display:flex;
+        flex-direction: column;
+        margin: 1vh 0;
+        list-style-type: none;
+        overflow: scroll;
+        padding: 0 1em;
+        height: 98vh;
+        min-width:0;
+    }
+    .list>button{
+        margin-bottom: 0.5em;
+        padding: 1px;
+        min-width:0;
+        white-space: nowrap;
+        border-radius: 9px;
+    }
+    .list>button:disabled{
+        background-color: #58bdb4;
+    }
+</style>
+<script>
+    async function doFetch(){
+        const elem = document.getElementById('tofetch');
+        const val = elem.value;
+        const host = (new URL(document.location)).hostname;
+        fetch(`http://${host}:8444/fetch/${val}`).then(r => r.text()).then(s => {
+            onRefreshclick();
+            setTimeout(() => {
+                const button = document.getElementById(`bfol_${val}`);
+                if(button) {button.click()
+                    setTimeout(() => {
+                        onRefreshclick();
+                    }, 10);
+                };
+            }, 10);
+            return s;
+        });
+    }
+</script>
+</html>
